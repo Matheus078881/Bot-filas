@@ -9,7 +9,7 @@ from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 PIX_KEY = os.getenv("PIX_KEY", "")
-OWNER_ROLE_NAME = "dono"
+OWNER_ROLE_NAME = "• DONO"
 if not TOKEN:
     raise RuntimeError("A variável DISCORD_TOKEN não foi configurada.")
 
@@ -346,20 +346,25 @@ class PixView(discord.ui.View):
             return
 
         self.liberado = True
-        chave = PIX_KEY or "⚠️ A chave Pix ainda não foi configurada no Render."
+        chave = PIX_KEY or "23294208707"
 
-        embed = discord.Embed(
-            title=f"🔓 Chave Pix Liberada • {self.valor} • {self.modo}",
-            description=(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "💳 **CHAVE PIX**\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"`{chave}`\n\n"
-                "🔒 **Liberada pelo dono.**"
-            ),
-        )
+        try:
+            valor_base = float(
+                self.valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
+            )
+            valor_liberado = valor_base + 0.10
+            valor_formatado = f"R$ {valor_liberado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except (ValueError, AttributeError):
+            valor_formatado = self.valor
+
         button.disabled = True
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(view=self)
+
+        await interaction.channel.send(
+            f"**Nome:** Matheus lima\n"
+            f"**Chave:** ''{chave}''\n"
+            f"**Valor:** ''{valor_formatado}''"
+        )
 
 
 async def entrar_na_fila(interaction, fila, valor, tipo):
@@ -540,4 +545,4 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
-        
+    
