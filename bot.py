@@ -32,8 +32,22 @@ FILAS = {
 filas = {nome: {"normal": set(), "infinito": set()} for nome in FILAS}
 
 def descobrir_fila(channel):
-    nome = getattr(channel, "name", "").lower()
-    return next((f for f in FILAS if f.lower() == nome), None)
+    # Aceita canais com emojis/símbolos antes do nome, por exemplo:
+    # "📱・2x2-mob" ou "📱 • 2x2-mob".
+    nome = getattr(channel, "name", "").lower().strip()
+
+    # Primeiro tenta o nome exato.
+    for fila in FILAS:
+        if nome == fila.lower():
+            return fila
+
+    # Depois procura o nome da fila no final do nome do canal.
+    # Isso evita erro quando o canal tem emoji ou separador.
+    for fila in FILAS:
+        if nome.endswith(fila.lower()):
+            return fila
+
+    return None
 
 def criar_embed(interaction, fila):
     c = FILAS[fila]
@@ -126,4 +140,4 @@ async def setup_hook():
     await bot.tree.sync()
 
 bot.run(TOKEN)
-        
+    
