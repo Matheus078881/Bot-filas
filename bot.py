@@ -5,78 +5,125 @@ import discord
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-
 if not TOKEN:
     raise RuntimeError("A variável DISCORD_TOKEN não foi configurada.")
 
-# Servidor simples para o Render manter o serviço ativo.
 app = Flask(__name__)
-
 @app.get("/")
 def home():
     return "Bot online!"
 
 def run_web():
-    port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
-
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
 threading.Thread(target=run_web, daemon=True).start()
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-class ModoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+# Um painel/fila separado para cada canal.
+# Troque os nomes dos canais aqui se os seus forem diferentes.
+FILAS = {
+    "1x1-mob": {"modo": "1x1 Mobile", "valor": "R$ 0,20", "jogadores": 2},
+    "2x2-mob": {"modo": "2x2 Mobile", "valor": "R$ 0,40", "jogadores": 4},
+    "3x3-mob": {"modo": "3x3 Mobile", "valor": "R$ 0,60", "jogadores": 6},
+    "4x4-mob": {"modo": "4x4 Mobile", "valor": "R$ 0,80", "jogadores": 8},
+}
 
-    async def escolher(self, interaction: discord.Interaction, modo: str):
-        await interaction.response.send_message(
-            f"✅ Você selecionou **{modo}**.",
-            ephemeral=True
+filas = {nome: {"normal": set(), "infinito": set()} for nome in FILAS}
+
+def descobrir_fila(channel):
+    nome = getattr(channel, "name", "").lower()
+    return next((f for f in FILAS if f.lower() == nome), None)
+
+def criar_embed(interaction, fila):
+    c = FILAS[fila]
+    embed = discord.Embed(
+        title=f"🔥 {c['modo'].upper()} | SUA ORG",
+        description=(
+            f"🎮 **Modo:**\n{c['modo']}\n\n"
+            f"💰 **Valor:**\n{c['valor']}\n\n"
+            f"👥 **Jogadores:**\n{c['jogadores']}\n\n"
+            "Escolha uma opção para entrar na fila."
         )
+    )
+    # Usa o avatar do próprio bot, nunca a imagem de outra organização.
+    if interaction.client.user:
+        embed.set_thumbnail(url=interaction.client.user.display_avatar.url)
+    return embed
 
-    @discord.ui.button(label="1v1", style=discord.ButtonStyle.primary, custom_id="modo_1v1")
-    async def um(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.escolher(interaction, "1v1")
+class FilaView(discord.ui.View):
+    def __init__(self, fila):
+        super().__init__(timeout=None)
+        self.fila = fila
 
-    @discord.ui.button(label="2v2", style=discord.ButtonStyle.success, custom_id="modo_2v2")
-    async def dois(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.escolher(interaction, "2v2")
+    async def entrar(self, interaction, tipo):
+        uid = interaction.user.id
+        f = filas[self.fila]
+        f["normal"].discard(uid)
+        f["infinito"].discard(uid)
+        f[tipo].add(uid)
+        nome = "Gelo Normal" if tipo == "normal" else "Gelo Infinito"
+        limite = FILAS[self.fila]["jogadores"] // 2
+        qtd = len(f[tipo])
+        await interaction.response.send_message(
+            f"✅ Você entrou na fila **{self.fila}** — **{nome}**.\n"
+            f"👥 Jogadores: **{qtd}/{limite}**", ephemeral=True
+        )
+        if qtd >= limite:
+            mentions = " ".join(f"<@{x}>" for x in f[tipo])
+            await interaction.channel.send(
+                f"🔥 **PARTIDA ENCONTRADA!**\n"
+                f"Modo: **{FILAS[self.fila]['modo']}**\n"
+                f"Tipo: **{nome}**\n"
+                f"Jogadores: {mentions}"
+            )
+            f[tipo].clear()
 
-    @discord.ui.button(label="3v3", style=discord.ButtonStyle.secondary, custom_id="modo_3v3")
-    async def tres(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.escolher(interaction, "3v3")
+    @discord.ui.button(label="🧊 Gelo Normal", style=discord.ButtonStyle.secondary, custom_id="gelo_normal")
+    async def normal(self, interaction, button):
+        await self.entrar(interaction, "normal")
 
-    @discord.ui.button(label="4v4", style=discord.ButtonStyle.danger, custom_id="modo_4v4")
-    async def quatro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.escolher(interaction, "4v4")
+    @discord.ui.button(label="🧊 Gelo Infinito", style=discord.ButtonStyle.secondary, custom_id="gelo_infinito")
+    async def infinito(self, interaction, button):
+        await self.entrar(interaction, "infinito")
 
+    @discord.ui.button(label="❌ Sair da fila", style=discord.ButtonStyle.danger, custom_id="sair_fila")
+    async def sair(self, interaction, button):
+        uid = interaction.user.id
+        filas[self.fila]["normal"].discard(uid)
+        filas[self.fila]["infinito"].discard(uid)
+        await interaction.response.send_message("✅ Você saiu da fila.", ephemeral=True)
 
 @bot.event
 async def on_ready():
-    bot.add_view(ModoView())
+    for fila in FILAS:
+        bot.add_view(FilaView(fila))
     print(f"Bot conectado como {bot.user}")
 
+@bot.tree.command(name="painel", description="Envia o painel da fila deste canal.")
+async def painel(interaction):
+    fila = descobrir_fila(interaction.channel)
+    if not fila:
+        canais = ", ".join(f"#{x}" for x in FILAS)
+        await interaction.response.send_message(
+            f"❌ Use /painel em um destes canais: {canais}", ephemeral=True
+        )
+        return
+    await interaction.response.send_message(embed=criar_embed(interaction, fila), view=FilaView(fila))
 
-@bot.tree.command(name="painel", description="Envia o painel de modos 1v1, 2v2, 3v3 e 4v4.")
-async def painel(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🎮 PAINEL DE PARTIDAS",
-        description="Escolha o modo da sua partida:",
-    )
-    embed.add_field(name="⚔️ 1v1", value="1 jogador contra 1 jogador", inline=False)
-    embed.add_field(name="👥 2v2", value="2 jogadores contra 2 jogadores", inline=False)
-    embed.add_field(name="👥 3v3", value="3 jogadores contra 3 jogadores", inline=False)
-    embed.add_field(name="🔥 4v4", value="4 jogadores contra 4 jogadores", inline=False)
-
-    await interaction.response.send_message(embed=embed, view=ModoView())
-
-
-async def sync_commands():
-    await bot.tree.sync()
+@bot.tree.command(name="limparfila", description="Limpa a fila deste canal.")
+async def limparfila(interaction):
+    fila = descobrir_fila(interaction.channel)
+    if not fila:
+        await interaction.response.send_message("❌ Este canal não é uma fila.", ephemeral=True)
+        return
+    filas[fila]["normal"].clear()
+    filas[fila]["infinito"].clear()
+    await interaction.response.send_message(f"🧹 Fila **{fila}** limpa.", ephemeral=True)
 
 @bot.event
 async def setup_hook():
-    await sync_commands()
+    await bot.tree.sync()
 
 bot.run(TOKEN)
+        
