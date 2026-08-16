@@ -250,6 +250,7 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
     await interaction.channel.send(
         content=f"👤 <@{uid}> entrou na fila **{valor}** — **{FILAS[fila]['modo']}**.",
         embed=embed_atualizado,
+        view=FilaView(fila, valor),
         allowed_mentions=discord.AllowedMentions(users=True),
     )
 
