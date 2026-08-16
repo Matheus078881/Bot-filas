@@ -4,10 +4,12 @@ import threading
 from flask import Flask
 import discord
 
-# VERSAO FINAL 2026-08-16 - ordem decrescente + confirmacao de partida
+# VERSAO FINAL 2026-08-16 - filas + confirmacao + liberacao PIX
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+PIX_KEY = os.getenv("PIX_KEY", "")
+OWNER_ROLE_NAME = "dono"
 if not TOKEN:
     raise RuntimeError("A variável DISCORD_TOKEN não foi configurada.")
 
@@ -216,47 +218,148 @@ class SairButton(discord.ui.Button):
         )
 
 class ConfirmacaoView(discord.ui.View):
-    def __init__(self, jogadores):
+    def __init__(self, jogadores, valor, modo):
         super().__init__(timeout=None)
         self.jogadores = set(jogadores)
         self.confirmados = set()
+        self.valor = valor
+        self.modo = modo
+        self.pix_liberado = False
 
     def criar_embed(self):
-        confirmados = list(self.confirmados)
-        if confirmados:
-            lista = "\n".join(f"👤 <@{uid}> — **Confirmou a partida!**" for uid in confirmados)
+        if self.confirmados:
+            lista = "\n".join(
+                f"👤 <@{uid}> — **Confirmou a partida!**"
+                for uid in self.confirmados
+            )
         else:
             lista = "Nenhum jogador confirmou ainda."
 
         embed = discord.Embed(
-            title="✅ Partida Confirmada!",
+            title=f"💰 {self.valor} • 🎮 {self.modo}",
             description=(
-                lista + "\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "**CONFIRMAÇÃO DA PARTIDA**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{lista}\n\n"
                 "*O outro jogador deverá confirmar a partida.*"
-            )
+            ),
         )
         return embed
 
-    @discord.ui.button(label="✅ Confirmar partida", style=discord.ButtonStyle.success)
+    def criar_embed_pix(self, mensagem):
+        embed = discord.Embed(
+            title=f"💰 {self.valor} • 🎮 {self.modo}",
+            description=(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔑 **CHAVE PIX**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{mensagem}"
+            ),
+        )
+        return embed
+
+    def eh_dono(self, member):
+        if not isinstance(member, discord.Member):
+            return False
+        return any(role.name.lower() == OWNER_ROLE_NAME.lower() for role in member.roles)
+
+    @discord.ui.button(label="✅ Confirmar partida", style=discord.ButtonStyle.success, custom_id="partida_confirmar")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = interaction.user.id
         if uid not in self.jogadores:
-            await interaction.response.send_message("❌ Você não participa desta partida.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Você não participa desta partida.", ephemeral=True
+            )
             return
         if uid in self.confirmados:
-            await interaction.response.send_message("⚠️ Você já confirmou a partida!", ephemeral=True)
+            await interaction.response.send_message(
+                "⚠️ Você já confirmou a partida!", ephemeral=True
+            )
             return
 
         self.confirmados.add(uid)
         await interaction.response.edit_message(embed=self.criar_embed(), view=self)
 
-    @discord.ui.button(label="❌ Cancelar partida", style=discord.ButtonStyle.danger)
+        # Assim que um jogador confirma, avisa qual é o outro jogador que precisa confirmar.
+        outro = next((x for x in self.jogadores if x != uid and x not in self.confirmados), None)
+        if outro is not None:
+            await interaction.channel.send(
+                embed=discord.Embed(
+                    title=f"💰 {self.valor} • 🎮 {self.modo}",
+                    description=f"⏳ **Esperando o <@{outro}> confirmar a partida!**\n\n*O outro jogador deverá confirmar a partida.*",
+                )
+            )
+
+        # Quando os dois confirmarem, chama o dono para liberar a chave PIX.
+        if self.confirmados == self.jogadores:
+            await interaction.channel.send(
+                embed=discord.Embed(
+                    title=f"💰 {self.valor} • 🎮 {self.modo}",
+                    description=(
+                        "🔑 **Esperando o dono liberar a Chave Pix!**\n\n"
+                        "*Os dois jogadores confirmaram a partida.*"
+                    ),
+                ),
+                view=PixView(self.jogadores, self.valor, self.modo),
+            )
+
+    @discord.ui.button(label="❌ Cancelar partida", style=discord.ButtonStyle.danger, custom_id="partida_cancelar")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id not in self.jogadores:
-            await interaction.response.send_message("❌ Você não participa desta partida.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Você não participa desta partida.", ephemeral=True
+            )
             return
-        await interaction.response.send_message("🗑️ Partida cancelada. Fechando a sala...", ephemeral=True)
+        await interaction.response.send_message(
+            "🗑️ Partida cancelada. Fechando a sala...", ephemeral=True
+        )
         await interaction.channel.delete(reason="Partida cancelada pelos jogadores")
+
+
+class PixView(discord.ui.View):
+    def __init__(self, jogadores, valor, modo):
+        super().__init__(timeout=None)
+        self.jogadores = set(jogadores)
+        self.valor = valor
+        self.modo = modo
+        self.liberado = False
+
+    def eh_dono(self, member):
+        return isinstance(member, discord.Member) and any(
+            role.name.lower() == OWNER_ROLE_NAME.lower() for role in member.roles
+        )
+
+    @discord.ui.button(label="🔑 Liberar Chave", style=discord.ButtonStyle.primary, custom_id="pix_liberar_chave")
+    async def liberar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.eh_dono(interaction.user):
+            await interaction.response.send_message(
+                "❌ Apenas pessoas com o cargo **dono** podem liberar a Chave Pix.",
+                ephemeral=True,
+            )
+            return
+
+        if self.liberado:
+            await interaction.response.send_message(
+                "⚠️ A Chave Pix já foi liberada.", ephemeral=True
+            )
+            return
+
+        self.liberado = True
+        chave = PIX_KEY or "⚠️ A chave Pix ainda não foi configurada no Render."
+
+        embed = discord.Embed(
+            title=f"🔓 Chave Pix Liberada • {self.valor} • {self.modo}",
+            description=(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "💳 **CHAVE PIX**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"`{chave}`\n\n"
+                "🔒 **Liberada pelo dono.**"
+            ),
+        )
+        button.disabled = True
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 async def entrar_na_fila(interaction, fila, valor, tipo):
@@ -344,9 +447,9 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
 
         mentions = " ".join(f"<@{x}>" for x in jogadores)
 
-        confirm_view = ConfirmacaoView(jogadores)
+        confirm_view = ConfirmacaoView(jogadores, valor, FILAS[fila]["modo"])
         await private_channel.send(
-            content=f"🔥 **PARTIDA ENCONTRADA!**\n{mentions}",
+            content=mentions,
             embed=confirm_view.criar_embed(),
             view=confirm_view,
         )
@@ -437,4 +540,4 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
-                         
+        
