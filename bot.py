@@ -41,7 +41,7 @@ FILAS = {
     "4x4-mob": {"modo": "4x4 Mobile", "jogadores": 8},
 }
 
-VALORES = [
+VALORES = sorted([
     "R$ 0,20",
     "R$ 0,30",
     "R$ 0,40",
@@ -58,7 +58,7 @@ VALORES = [
     "R$ 30,00",
     "R$ 50,00",
     "R$ 100,00",
-]
+], key=lambda v: float(v.replace("R$ ", "").replace(".", "").replace(",", ".")))
 
 # chave = (canal, valor)
 # cada fila guarda os IDs dos jogadores separados por tipo.
@@ -244,16 +244,6 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
         view=FilaView(fila, valor),
     )
 
-    # Manda também a mesma informação com o @ de quem acabou de entrar.
-    # Assim, quando o segundo jogador entrar, os dois aparecem no card
-    # e o jogador que acabou de entrar recebe a menção.
-    await interaction.channel.send(
-        content=f"👤 <@{uid}> entrou na fila **{valor}** — **{FILAS[fila]['modo']}**.",
-        embed=embed_atualizado,
-        view=FilaView(fila, valor),
-        allowed_mentions=discord.AllowedMentions(users=True),
-    )
-
     # Ainda não completou.
     if len(estado[tipo]) < limite:
         return
@@ -401,4 +391,4 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
-        
+            
