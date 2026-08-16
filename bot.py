@@ -24,10 +24,17 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Troque os nomes dos canais aqui se os seus forem diferentes.
 FILAS = {
     "1x1-mob": {"modo": "1x1 Mobile", "valor": "R$ 0,20", "jogadores": 2},
-    "2x2-mob": {"modo": "2x2 Mobile", "valor": "R$ 0,40", "jogadores": 4},
-    "3x3-mob": {"modo": "3x3 Mobile", "valor": "R$ 0,60", "jogadores": 6},
-    "4x4-mob": {"modo": "4x4 Mobile", "valor": "R$ 0,80", "jogadores": 8},
+    "2x2-mob": {"modo": "2x2 Mobile", "valor": "R$ 0,30", "jogadores": 4},
+    "3x3-mob": {"modo": "3x3 Mobile", "valor": "R$ 0,40", "jogadores": 6},
+    "4x4-mob": {"modo": "4x4 Mobile", "valor": "R$ 0,50", "jogadores": 8},
 }
+
+# Valores disponíveis para as próximas filas/painéis.
+VALORES = [
+    "R$ 0,20", "R$ 0,30", "R$ 0,40", "R$ 0,50",
+    "R$ 0,75", "R$ 1,00", "R$ 2,00", "R$ 3,00",
+    "R$ 5,00", "R$ 7,00", "R$ 10,00",
+]
 
 filas = {nome: {"normal": set(), "infinito": set()} for nome in FILAS}
 
@@ -52,14 +59,26 @@ def descobrir_fila(channel):
 def criar_embed(interaction, fila):
     c = FILAS[fila]
     embed = discord.Embed(
-        title=f"🔥 {c['modo'].upper()} | SUA ORG",
+        title=f"🔥 {c['modo'].upper()} | ORG BOM E NOVO",
         description=(
-            f"🎮 **Modo:**\n{c['modo']}\n\n"
-            f"💰 **Valor:**\n{c['valor']}\n\n"
-            f"👥 **Jogadores:**\n{c['jogadores']}\n\n"
-            "Escolha uma opção para entrar na fila."
+            f"🎮 **Modo:**\\n{c['modo']}\\n\\n"
+            f"💰 **Valor:**\\n{c['valor']}\\n\\n"
+            f"👥 **Jogadores:**\\n"
         )
     )
+
+    f = filas[fila]
+    normal = list(f["normal"])
+    infinito = list(f["infinito"])
+
+    jogadores_texto = (
+        "🧊 **Gelo Normal:** " +
+        (" ".join(f"<@{x}>" for x in normal) if normal else "Nenhum") +
+        f"\\n\\n🧊 **Gelo Infinito:** " +
+        (" ".join(f"<@{x}>" for x in infinito) if infinito else "Nenhum")
+    )
+    embed.description += jogadores_texto
+
     # Usa o avatar do próprio bot, nunca a imagem de outra organização.
     if interaction.client.user:
         embed.set_thumbnail(url=interaction.client.user.display_avatar.url)
@@ -73,25 +92,46 @@ class FilaView(discord.ui.View):
     async def entrar(self, interaction, tipo):
         uid = interaction.user.id
         f = filas[self.fila]
-        f["normal"].discard(uid)
-        f["infinito"].discard(uid)
+
+        # Se já está exatamente nesta fila/modo, avisa somente a própria pessoa.
+        if uid in f[tipo]:
+            await interaction.response.send_message(
+                "⚠️ Você já está na fila!",
+                ephemeral=True
+            )
+            return
+
+        # Se estava no outro modo, troca para o modo clicado.
+        outro = "infinito" if tipo == "normal" else "normal"
+        f[outro].discard(uid)
         f[tipo].add(uid)
+
         nome = "Gelo Normal" if tipo == "normal" else "Gelo Infinito"
         limite = FILAS[self.fila]["jogadores"] // 2
         qtd = len(f[tipo])
-        await interaction.response.send_message(
-            f"✅ Você entrou na fila **{self.fila}** — **{nome}**.\n"
-            f"👥 Jogadores: **{qtd}/{limite}**", ephemeral=True
+
+        # Não cria mensagem embaixo do painel.
+        await interaction.response.defer()
+
+        # Atualiza o painel original, mostrando os @ dos jogadores.
+        await interaction.message.edit(
+            embed=criar_embed(interaction, self.fila),
+            view=self
         )
+
         if qtd >= limite:
             mentions = " ".join(f"<@{x}>" for x in f[tipo])
             await interaction.channel.send(
-                f"🔥 **PARTIDA ENCONTRADA!**\n"
-                f"Modo: **{FILAS[self.fila]['modo']}**\n"
-                f"Tipo: **{nome}**\n"
+                f"🔥 **PARTIDA ENCONTRADA!**\\n"
+                f"Modo: **{FILAS[self.fila]['modo']}**\\n"
+                f"Tipo: **{nome}**\\n"
                 f"Jogadores: {mentions}"
             )
             f[tipo].clear()
+            await interaction.message.edit(
+                embed=criar_embed(interaction, self.fila),
+                view=self
+            )
 
     @discord.ui.button(label="🧊 Gelo Normal", style=discord.ButtonStyle.secondary, custom_id="gelo_normal")
     async def normal(self, interaction, button):
@@ -106,7 +146,11 @@ class FilaView(discord.ui.View):
         uid = interaction.user.id
         filas[self.fila]["normal"].discard(uid)
         filas[self.fila]["infinito"].discard(uid)
-        await interaction.response.send_message("✅ Você saiu da fila.", ephemeral=True)
+        await interaction.response.defer()
+        await interaction.message.edit(
+            embed=criar_embed(interaction, self.fila),
+            view=self
+        )
 
 @bot.event
 async def on_ready():
