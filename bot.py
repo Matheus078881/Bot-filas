@@ -3,6 +3,8 @@ import re
 import threading
 from flask import Flask
 import discord
+
+# VERSAO FINAL 2026-08-16 - ordem decrescente + confirmacao de partida
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -41,7 +43,7 @@ FILAS = {
     "4x4-mob": {"modo": "4x4 Mobile", "jogadores": 8},
 }
 
-VALORES = sorted([
+VALORES = [
     "R$ 0,20",
     "R$ 0,30",
     "R$ 0,40",
@@ -58,7 +60,7 @@ VALORES = sorted([
     "R$ 30,00",
     "R$ 50,00",
     "R$ 100,00",
-], key=lambda v: float(v.replace("R$ ", "").replace(".", "").replace(",", ".")))
+]
 
 # chave = (canal, valor)
 # cada fila guarda os IDs dos jogadores separados por tipo.
@@ -213,6 +215,50 @@ class SairButton(discord.ui.Button):
             view=FilaView(self.fila, self.valor),
         )
 
+class ConfirmacaoView(discord.ui.View):
+    def __init__(self, jogadores):
+        super().__init__(timeout=None)
+        self.jogadores = set(jogadores)
+        self.confirmados = set()
+
+    def criar_embed(self):
+        confirmados = list(self.confirmados)
+        if confirmados:
+            lista = "\n".join(f"👤 <@{uid}> — **Confirmou a partida!**" for uid in confirmados)
+        else:
+            lista = "Nenhum jogador confirmou ainda."
+
+        embed = discord.Embed(
+            title="✅ Partida Confirmada!",
+            description=(
+                lista + "\n\n"
+                "*O outro jogador deverá confirmar a partida.*"
+            )
+        )
+        return embed
+
+    @discord.ui.button(label="✅ Confirmar partida", style=discord.ButtonStyle.success)
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        if uid not in self.jogadores:
+            await interaction.response.send_message("❌ Você não participa desta partida.", ephemeral=True)
+            return
+        if uid in self.confirmados:
+            await interaction.response.send_message("⚠️ Você já confirmou a partida!", ephemeral=True)
+            return
+
+        self.confirmados.add(uid)
+        await interaction.response.edit_message(embed=self.criar_embed(), view=self)
+
+    @discord.ui.button(label="❌ Cancelar partida", style=discord.ButtonStyle.danger)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.jogadores:
+            await interaction.response.send_message("❌ Você não participa desta partida.", ephemeral=True)
+            return
+        await interaction.response.send_message("🗑️ Partida cancelada. Fechando a sala...", ephemeral=True)
+        await interaction.channel.delete(reason="Partida cancelada pelos jogadores")
+
+
 async def entrar_na_fila(interaction, fila, valor, tipo):
     uid = interaction.user.id
     estado = filas[chave_fila(fila, valor)]
@@ -243,6 +289,7 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
         embed=embed_atualizado,
         view=FilaView(fila, valor),
     )
+
 
     # Ainda não completou.
     if len(estado[tipo]) < limite:
@@ -297,13 +344,11 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
 
         mentions = " ".join(f"<@{x}>" for x in jogadores)
 
+        confirm_view = ConfirmacaoView(jogadores)
         await private_channel.send(
-            content=(
-                f"🔥 **PARTIDA ENCONTRADA!**\n"
-                f"{mentions}\n\n"
-                f"Todos os jogadores da fila foram colocados nesta sala automaticamente."
-            ),
-            embed=embed_partida,
+            content=f"🔥 **PARTIDA ENCONTRADA!**\n{mentions}",
+            embed=confirm_view.criar_embed(),
+            view=confirm_view,
         )
 
         # Limpa somente a fila que acabou de formar a partida.
@@ -355,8 +400,9 @@ async def painel(interaction: discord.Interaction):
         ephemeral=True,
     )
 
-    # Uma mensagem separada para cada valor.
-    for valor in VALORES:
+    # Discord coloca a mensagem mais nova embaixo; por isso criamos do menor para o maior.
+    # Visualmente fica: 100,00 no topo e 0,20 embaixo.
+    for valor in reversed(VALORES):
         await interaction.channel.send(
             embed=criar_embed(fila, valor),
             view=FilaView(fila, valor),
@@ -391,3 +437,4 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
+                         
