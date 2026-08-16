@@ -391,4 +391,3 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
-        
