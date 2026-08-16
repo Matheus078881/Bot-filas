@@ -33,7 +33,8 @@ FILAS = {
 VALORES = [
     "R$ 0,20", "R$ 0,30", "R$ 0,40", "R$ 0,50",
     "R$ 0,75", "R$ 1,00", "R$ 2,00", "R$ 3,00",
-    "R$ 5,00", "R$ 7,00", "R$ 10,00",
+    "R$ 5,00", "R$ 7,00", "R$ 10,00", "R$ 15,00",
+    "R$ 20,00", "R$ 30,00", "R$ 50,00", "R$ 100,00",
 ]
 
 filas = {nome: {"normal": set(), "infinito": set()} for nome in FILAS}
@@ -58,30 +59,62 @@ def descobrir_fila(channel):
 
 def criar_embed(interaction, fila):
     c = FILAS[fila]
-    embed = discord.Embed(
-        title=f"🔥 {c['modo'].upper()} | ORG BOM E NOVO",
-        description=(
-            f"🎮 **Modo:**\\n{c['modo']}\\n\\n"
-            f"💰 **Valor:**\\n{c['valor']}\\n\\n"
-            f"👥 **Jogadores:**\\n"
-        )
-    )
-
     f = filas[fila]
+
     normal = list(f["normal"])
     infinito = list(f["infinito"])
 
-    jogadores_texto = (
-        "🧊 **Gelo Normal:** " +
-        (" ".join(f"<@{x}>" for x in normal) if normal else "Nenhum") +
-        f"\\n\\n🧊 **Gelo Infinito:** " +
-        (" ".join(f"<@{x}>" for x in infinito) if infinito else "Nenhum")
+    embed = discord.Embed(
+        title=f"🔥 {c['modo'].upper()} | ORG BOM E NOVO",
+        description="━━━━━━━━━━━━━━━━━━━━\\n"
+                    "🎯 **PAINEL DE FILA**\\n"
+                    "Entre em uma das filas abaixo e aguarde a partida.\\n"
+                    "━━━━━━━━━━━━━━━━━━━━",
     )
-    embed.description += jogadores_texto
 
-    # Usa o avatar do próprio bot, nunca a imagem de outra organização.
+    embed.add_field(
+        name="🎮 Modo",
+        value=f"**{c['modo']}**",
+        inline=True
+    )
+    embed.add_field(
+        name="💰 Valor desta fila",
+        value=f"**{c['valor']}**",
+        inline=True
+    )
+    embed.add_field(
+        name="👥 Vagas",
+        value=f"**{c['jogadores']} jogadores**",
+        inline=True
+    )
+
+    normal_texto = " ".join(f"<@{x}>" for x in normal) if normal else "Nenhum jogador"
+    infinito_texto = " ".join(f"<@{x}>" for x in infinito) if infinito else "Nenhum jogador"
+
+    embed.add_field(
+        name="🧊 Gelo Normal",
+        value=normal_texto,
+        inline=False
+    )
+    embed.add_field(
+        name="♾️ Gelo Infinito",
+        value=infinito_texto,
+        inline=False
+    )
+
+    valores_texto = " • ".join(VALORES)
+    embed.add_field(
+        name="💵 TODOS OS VALORES DISPONÍVEIS",
+        value=valores_texto,
+        inline=False
+    )
+
+    embed.set_footer(text="ORG BOM E NOVO • Escolha Gelo Normal ou Gelo Infinito")
+
+    # Usa o avatar do próprio bot.
     if interaction.client.user:
         embed.set_thumbnail(url=interaction.client.user.display_avatar.url)
+
     return embed
 
 class FilaView(discord.ui.View):
@@ -122,9 +155,9 @@ class FilaView(discord.ui.View):
         if qtd >= limite:
             mentions = " ".join(f"<@{x}>" for x in f[tipo])
             await interaction.channel.send(
-                f"🔥 **PARTIDA ENCONTRADA!**\\n"
-                f"Modo: **{FILAS[self.fila]['modo']}**\\n"
-                f"Tipo: **{nome}**\\n"
+                f"🔥 **PARTIDA ENCONTRADA!**\n"
+                f"Modo: **{FILAS[self.fila]['modo']}**\n"
+                f"Tipo: **{nome}**\n"
                 f"Jogadores: {mentions}"
             )
             f[tipo].clear()
