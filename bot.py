@@ -1,11 +1,17 @@
 import os
 import re
 import threading
+import base64
+import io
 from flask import Flask
 import discord
 from discord.ext import commands
 
-LOGO_PATH = "org_draco.png"
+# Logo ORG DRACO compactada e embutida no código.
+LOGO_B64 = """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"""
+
+def criar_arquivo_logo():
+    return discord.File(io.BytesIO(base64.b64decode(LOGO_B64)), filename="org_draco.webp")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
@@ -104,7 +110,7 @@ def criar_embed(fila, valor, tipo=None, ids=None):
         title=f"🔥 {config['modo'].upper()} | ORG DRACO",
         color=discord.Color.red(),
     )
-    embed.set_thumbnail(url="attachment://org_draco.png")
+    embed.set_thumbnail(url="attachment://org_draco.webp")
 
     embed.add_field(
         name="🎮 Modo",
@@ -345,7 +351,7 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
             ),
             embed=embed_partida,
             view=PartidaView(),
-            file=discord.File(LOGO_PATH, filename="org_draco.png"),
+            file=criar_arquivo_logo(),
         )
 
         # Limpa somente a fila que acabou de formar a partida.
@@ -403,7 +409,7 @@ async def painel(interaction: discord.Interaction):
         await interaction.channel.send(
             embed=criar_embed(fila, valor),
             view=FilaView(fila, valor),
-            file=discord.File(LOGO_PATH, filename="org_draco.png"),
+            file=criar_arquivo_logo(),
         )
 
 @bot.tree.command(
@@ -451,19 +457,4 @@ async def limparfila(interaction: discord.Interaction):
             try:
                 await message.delete()
                 apagadas += 1
-            except discord.HTTPException:
-                pass
-
-    await interaction.response.send_message(
-        f"🧹 **{apagadas}** filas antigas de **{fila}** foram apagadas. "
-        f"As mensagens normais dos jogadores foram mantidas.",
-        ephemeral=True,
-    )
-
-@bot.event
-async def setup_hook():
-    await bot.tree.sync()
-    await registrar_views()
-
-bot.run(TOKEN)
-    
+            except discord.HTTPExcept
