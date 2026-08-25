@@ -1,6 +1,8 @@
 import os
 import re
 import threading
+import io
+import qrcode
 from flask import Flask
 import discord
 
@@ -8,7 +10,9 @@ import discord
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-PIX_KEY = os.getenv("PIX_KEY", "")
+PIX_KEY = os.getenv("PIX_KEY", "07507718280")
+PIX_NAME = os.getenv("PIX_NAME", "Luiz Almeida")
+PIX_CITY = os.getenv("PIX_CITY", "BRASIL")
 OWNER_ROLE_NAME = "• DONO"
 if not TOKEN:
     raise RuntimeError("A variável DISCORD_TOKEN não foi configurada.")
@@ -103,9 +107,8 @@ def criar_embed(fila, valor, tipo=None, ids=None):
     config = FILAS[fila]
 
     embed = discord.Embed(
-        title=f"🔥 {config['modo'].upper()} | ORG BOM E NOVO",
+        title=f"🔥 {config['modo'].upper()} | ORG DRACO",
         description=(
-            "🎯 **FILA DE PARTIDA**\n"
             "Entre na fila usando os botões abaixo.\n"
             "Quando a fila completar, uma sala privada será criada automaticamente."
         ),
@@ -149,7 +152,7 @@ def criar_embed(fila, valor, tipo=None, ids=None):
         inline=False,
     )
 
-    embed.set_footer(text="ORG BOM E NOVO • Escolha Gelo Normal ou Gelo Infinito")
+    embed.set_footer(text="ORG DRACO • Escolha Gelo Normal ou Gelo Infinito")
     return embed
 
 class FilaView(discord.ui.View):
@@ -262,7 +265,15 @@ class ConfirmacaoView(discord.ui.View):
     def eh_dono(self, member):
         if not isinstance(member, discord.Member):
             return False
-        return any(role.name.lower() == OWNER_ROLE_NAME.lower() for role in member.roles)
+        if member.guild_permissions.administrator:
+            return True
+        nomes_permitidos = {
+            OWNER_ROLE_NAME.lower(),
+            "adm",
+            "admin",
+            "administrador",
+        }
+        return any(role.name.lower() in nomes_permitidos for role in member.roles)
 
     @discord.ui.button(label="✅ Confirmar partida", style=discord.ButtonStyle.success, custom_id="partida_confirmar")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -317,6 +328,49 @@ class ConfirmacaoView(discord.ui.View):
         await interaction.channel.delete(reason="Partida cancelada pelos jogadores")
 
 
+def _pix_field(tag, value):
+    value = str(value)
+    return f"{tag:02d}{len(value):02d}{value}"
+
+
+def _pix_crc16(payload):
+    crc = 0xFFFF
+    for byte in payload.encode("utf-8"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
+    return f"{crc:04X}"
+
+
+def gerar_payload_pix(chave, valor):
+    # Payload PIX Copia e Cola (EMV), com valor dinâmico.
+    chave = str(chave).strip()
+    nome = re.sub(r"[^A-Za-z0-9 ]", "", PIX_NAME.upper()).strip()[:25]
+    cidade = re.sub(r"[^A-Za-z0-9 ]", "", PIX_CITY.upper()).strip()[:15] or "BRASIL"
+    merchant_account = _pix_field(0, "BR.GOV.BCB.PIX") + _pix_field(1, chave)
+    payload = (
+        _pix_field(0, "01")
+        + _pix_field(26, merchant_account)
+        + _pix_field(52, "0000")
+        + _pix_field(53, "986")
+        + _pix_field(54, f"{valor:.2f}")
+        + _pix_field(58, "BR")
+        + _pix_field(59, nome)
+        + _pix_field(60, cidade)
+        + _pix_field(62, _pix_field(5, "***"))
+    )
+    return payload + "6304" + _pix_crc16(payload + "6304")
+
+
+def gerar_qr_pix(chave, valor):
+    payload = gerar_payload_pix(chave, valor)
+    imagem = qrcode.make(payload)
+    buffer = io.BytesIO()
+    imagem.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
 class PixView(discord.ui.View):
     def __init__(self, jogadores, valor, modo):
         super().__init__(timeout=None)
@@ -326,15 +380,23 @@ class PixView(discord.ui.View):
         self.liberado = False
 
     def eh_dono(self, member):
-        return isinstance(member, discord.Member) and any(
-            role.name.lower() == OWNER_ROLE_NAME.lower() for role in member.roles
-        )
+        if not isinstance(member, discord.Member):
+            return False
+        if member.guild_permissions.administrator:
+            return True
+        nomes_permitidos = {
+            OWNER_ROLE_NAME.lower(),
+            "adm",
+            "admin",
+            "administrador",
+        }
+        return any(role.name.lower() in nomes_permitidos for role in member.roles)
 
     @discord.ui.button(label="🔑 Liberar Chave", style=discord.ButtonStyle.primary, custom_id="pix_liberar_chave")
     async def liberar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.eh_dono(interaction.user):
             await interaction.response.send_message(
-                "❌ Apenas pessoas com o cargo **dono** podem liberar a Chave Pix.",
+                "❌ Apenas ADM ou superior pode liberar a Chave Pix.",
                 ephemeral=True,
             )
             return
@@ -346,13 +408,13 @@ class PixView(discord.ui.View):
             return
 
         self.liberado = True
-        chave = PIX_KEY or "23294208707"
+        chave = PIX_KEY or "07507718280"
 
         try:
             valor_base = float(
                 self.valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
             )
-            valor_liberado = valor_base + 0.10
+            valor_liberado = valor_base + 0.05
             valor_formatado = f"R$ {valor_liberado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         except (ValueError, AttributeError):
             valor_formatado = self.valor
@@ -360,11 +422,25 @@ class PixView(discord.ui.View):
         button.disabled = True
         await interaction.response.edit_message(view=self)
 
-        await interaction.channel.send(
-            f"**Nome:** Matheus lima\n"
-            f"**Chave:** ''{chave}''\n"
-            f"**Valor:** ''{valor_formatado}''"
-        )
+        try:
+            qr_buffer = gerar_qr_pix(chave, valor_liberado)
+            arquivo_qr = discord.File(qr_buffer, filename="pix_qrcode.png")
+            await interaction.channel.send(
+                content=(
+                    f"**Nome:** Luiz Almeida\n"
+                    f"**Chave:** ''{chave}''\n"
+                    f"**Valor:** ''{valor_formatado}''\n\n"
+                    "📱 **QR Code Pix:**"
+                ),
+                file=arquivo_qr,
+            )
+        except Exception as e:
+            await interaction.channel.send(
+                f"**Nome:** Luiz Almeida\n"
+                f"**Chave:** ''{chave}''\n"
+                f"**Valor:** ''{valor_formatado}''\n\n"
+                f"⚠️ Não consegui gerar o QR Code automaticamente: `{e}`"
+            )
 
 
 async def entrar_na_fila(interaction, fila, valor, tipo):
