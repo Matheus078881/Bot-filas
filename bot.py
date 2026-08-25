@@ -1,19 +1,11 @@
 import os
 import re
 import threading
-import io
-import qrcode
 from flask import Flask
 import discord
-
-# VERSAO FINAL 2026-08-16 - filas + confirmacao + liberacao PIX
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-PIX_KEY = os.getenv("PIX_KEY", "07507718280")
-PIX_NAME = os.getenv("PIX_NAME", "Luiz Almeida")
-PIX_CITY = os.getenv("PIX_CITY", "BRASIL")
-OWNER_ROLE_NAME = "• DONO"
 if not TOKEN:
     raise RuntimeError("A variável DISCORD_TOKEN não foi configurada.")
 
@@ -49,7 +41,7 @@ FILAS = {
     "4x4-mob": {"modo": "4x4 Mobile", "jogadores": 8},
 }
 
-VALORES = [
+VALORES = sorted([
     "R$ 0,20",
     "R$ 0,30",
     "R$ 0,40",
@@ -66,7 +58,7 @@ VALORES = [
     "R$ 30,00",
     "R$ 50,00",
     "R$ 100,00",
-]
+], key=lambda v: float(v.replace("R$ ", "").replace(".", "").replace(",", ".")))
 
 # chave = (canal, valor)
 # cada fila guarda os IDs dos jogadores separados por tipo.
@@ -108,10 +100,6 @@ def criar_embed(fila, valor, tipo=None, ids=None):
 
     embed = discord.Embed(
         title=f"🔥 {config['modo'].upper()} | ORG DRACO",
-        description=(
-            "Entre na fila usando os botões abaixo.\n"
-            "Quando a fila completar, uma sala privada será criada automaticamente."
-        ),
     )
 
     embed.add_field(
@@ -152,7 +140,6 @@ def criar_embed(fila, valor, tipo=None, ids=None):
         inline=False,
     )
 
-    embed.set_footer(text="ORG DRACO • Escolha Gelo Normal ou Gelo Infinito")
     return embed
 
 class FilaView(discord.ui.View):
@@ -220,229 +207,6 @@ class SairButton(discord.ui.Button):
             view=FilaView(self.fila, self.valor),
         )
 
-class ConfirmacaoView(discord.ui.View):
-    def __init__(self, jogadores, valor, modo):
-        super().__init__(timeout=None)
-        self.jogadores = set(jogadores)
-        self.confirmados = set()
-        self.valor = valor
-        self.modo = modo
-        self.pix_liberado = False
-
-    def criar_embed(self):
-        if self.confirmados:
-            lista = "\n".join(
-                f"👤 <@{uid}> — **Confirmou a partida!**"
-                for uid in self.confirmados
-            )
-        else:
-            lista = "Nenhum jogador confirmou ainda."
-
-        embed = discord.Embed(
-            title=f"💰 {self.valor} • 🎮 {self.modo}",
-            description=(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "**CONFIRMAÇÃO DA PARTIDA**\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{lista}\n\n"
-                "*O outro jogador deverá confirmar a partida.*"
-            ),
-        )
-        return embed
-
-    def criar_embed_pix(self, mensagem):
-        embed = discord.Embed(
-            title=f"💰 {self.valor} • 🎮 {self.modo}",
-            description=(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🔑 **CHAVE PIX**\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{mensagem}"
-            ),
-        )
-        return embed
-
-    def eh_dono(self, member):
-        if not isinstance(member, discord.Member):
-            return False
-        if member.guild_permissions.administrator:
-            return True
-        nomes_permitidos = {
-            OWNER_ROLE_NAME.lower(),
-            "adm",
-            "admin",
-            "administrador",
-        }
-        return any(role.name.lower() in nomes_permitidos for role in member.roles)
-
-    @discord.ui.button(label="✅ Confirmar partida", style=discord.ButtonStyle.success, custom_id="partida_confirmar")
-    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        uid = interaction.user.id
-        if uid not in self.jogadores:
-            await interaction.response.send_message(
-                "❌ Você não participa desta partida.", ephemeral=True
-            )
-            return
-        if uid in self.confirmados:
-            await interaction.response.send_message(
-                "⚠️ Você já confirmou a partida!", ephemeral=True
-            )
-            return
-
-        self.confirmados.add(uid)
-        await interaction.response.edit_message(embed=self.criar_embed(), view=self)
-
-        # Assim que um jogador confirma, avisa qual é o outro jogador que precisa confirmar.
-        outro = next((x for x in self.jogadores if x != uid and x not in self.confirmados), None)
-        if outro is not None:
-            await interaction.channel.send(
-                embed=discord.Embed(
-                    title=f"💰 {self.valor} • 🎮 {self.modo}",
-                    description=f"⏳ **Esperando o <@{outro}> confirmar a partida!**\n\n*O outro jogador deverá confirmar a partida.*",
-                )
-            )
-
-        # Quando os dois confirmarem, chama o dono para liberar a chave PIX.
-        if self.confirmados == self.jogadores:
-            await interaction.channel.send(
-                embed=discord.Embed(
-                    title=f"💰 {self.valor} • 🎮 {self.modo}",
-                    description=(
-                        "🔑 **Esperando o dono liberar a Chave Pix!**\n\n"
-                        "*Os dois jogadores confirmaram a partida.*"
-                    ),
-                ),
-                view=PixView(self.jogadores, self.valor, self.modo),
-            )
-
-    @discord.ui.button(label="❌ Cancelar partida", style=discord.ButtonStyle.danger, custom_id="partida_cancelar")
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id not in self.jogadores:
-            await interaction.response.send_message(
-                "❌ Você não participa desta partida.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "🗑️ Partida cancelada. Fechando a sala...", ephemeral=True
-        )
-        await interaction.channel.delete(reason="Partida cancelada pelos jogadores")
-
-
-def _pix_field(tag, value):
-    value = str(value)
-    return f"{tag:02d}{len(value):02d}{value}"
-
-
-def _pix_crc16(payload):
-    crc = 0xFFFF
-    for byte in payload.encode("utf-8"):
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
-    return f"{crc:04X}"
-
-
-def gerar_payload_pix(chave, valor):
-    # Payload PIX Copia e Cola (EMV), com valor dinâmico.
-    chave = str(chave).strip()
-    nome = re.sub(r"[^A-Za-z0-9 ]", "", PIX_NAME.upper()).strip()[:25]
-    cidade = re.sub(r"[^A-Za-z0-9 ]", "", PIX_CITY.upper()).strip()[:15] or "BRASIL"
-    merchant_account = _pix_field(0, "BR.GOV.BCB.PIX") + _pix_field(1, chave)
-    payload = (
-        _pix_field(0, "01")
-        + _pix_field(26, merchant_account)
-        + _pix_field(52, "0000")
-        + _pix_field(53, "986")
-        + _pix_field(54, f"{valor:.2f}")
-        + _pix_field(58, "BR")
-        + _pix_field(59, nome)
-        + _pix_field(60, cidade)
-        + _pix_field(62, _pix_field(5, "***"))
-    )
-    return payload + "6304" + _pix_crc16(payload + "6304")
-
-
-def gerar_qr_pix(chave, valor):
-    payload = gerar_payload_pix(chave, valor)
-    imagem = qrcode.make(payload)
-    buffer = io.BytesIO()
-    imagem.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
-
-
-class PixView(discord.ui.View):
-    def __init__(self, jogadores, valor, modo):
-        super().__init__(timeout=None)
-        self.jogadores = set(jogadores)
-        self.valor = valor
-        self.modo = modo
-        self.liberado = False
-
-    def eh_dono(self, member):
-        if not isinstance(member, discord.Member):
-            return False
-        if member.guild_permissions.administrator:
-            return True
-        nomes_permitidos = {
-            OWNER_ROLE_NAME.lower(),
-            "adm",
-            "admin",
-            "administrador",
-        }
-        return any(role.name.lower() in nomes_permitidos for role in member.roles)
-
-    @discord.ui.button(label="🔑 Liberar Chave", style=discord.ButtonStyle.primary, custom_id="pix_liberar_chave")
-    async def liberar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.eh_dono(interaction.user):
-            await interaction.response.send_message(
-                "❌ Apenas ADM ou superior pode liberar a Chave Pix.",
-                ephemeral=True,
-            )
-            return
-
-        if self.liberado:
-            await interaction.response.send_message(
-                "⚠️ A Chave Pix já foi liberada.", ephemeral=True
-            )
-            return
-
-        self.liberado = True
-        chave = PIX_KEY or "07507718280"
-
-        try:
-            valor_base = float(
-                self.valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
-            )
-            valor_liberado = valor_base + 0.05
-            valor_formatado = f"R$ {valor_liberado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        except (ValueError, AttributeError):
-            valor_formatado = self.valor
-
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
-
-        try:
-            qr_buffer = gerar_qr_pix(chave, valor_liberado)
-            arquivo_qr = discord.File(qr_buffer, filename="pix_qrcode.png")
-            await interaction.channel.send(
-                content=(
-                    f"**Nome:** Luiz Almeida\n"
-                    f"**Chave:** ''{chave}''\n"
-                    f"**Valor:** ''{valor_formatado}''\n\n"
-                    "📱 **QR Code Pix:**"
-                ),
-                file=arquivo_qr,
-            )
-        except Exception as e:
-            await interaction.channel.send(
-                f"**Nome:** Luiz Almeida\n"
-                f"**Chave:** ''{chave}''\n"
-                f"**Valor:** ''{valor_formatado}''\n\n"
-                f"⚠️ Não consegui gerar o QR Code automaticamente: `{e}`"
-            )
-
-
 async def entrar_na_fila(interaction, fila, valor, tipo):
     uid = interaction.user.id
     estado = filas[chave_fila(fila, valor)]
@@ -473,7 +237,6 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
         embed=embed_atualizado,
         view=FilaView(fila, valor),
     )
-
 
     # Ainda não completou.
     if len(estado[tipo]) < limite:
@@ -528,11 +291,13 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
 
         mentions = " ".join(f"<@{x}>" for x in jogadores)
 
-        confirm_view = ConfirmacaoView(jogadores, valor, FILAS[fila]["modo"])
         await private_channel.send(
-            content=mentions,
-            embed=confirm_view.criar_embed(),
-            view=confirm_view,
+            content=(
+                f"🔥 **PARTIDA ENCONTRADA!**\n"
+                f"{mentions}\n\n"
+                f"Todos os jogadores da fila foram colocados nesta sala automaticamente."
+            ),
+            embed=embed_partida,
         )
 
         # Limpa somente a fila que acabou de formar a partida.
@@ -584,9 +349,8 @@ async def painel(interaction: discord.Interaction):
         ephemeral=True,
     )
 
-    # Discord coloca a mensagem mais nova embaixo; por isso criamos do menor para o maior.
-    # Visualmente fica: 100,00 no topo e 0,20 embaixo.
-    for valor in reversed(VALORES):
+    # Uma mensagem separada para cada valor.
+    for valor in VALORES:
         await interaction.channel.send(
             embed=criar_embed(fila, valor),
             view=FilaView(fila, valor),
@@ -621,4 +385,3 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
-    
