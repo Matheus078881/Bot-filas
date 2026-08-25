@@ -58,7 +58,7 @@ VALORES = sorted([
     "R$ 30,00",
     "R$ 50,00",
     "R$ 100,00",
-], key=lambda v: float(v.replace("R$ ", "").replace(".", "").replace(",", ".")))
+], key=lambda v: float(v.replace("R$ ", "").replace(".", "").replace(",", ".")), reverse=True)
 
 # chave = (canal, valor)
 # cada fila guarda os IDs dos jogadores separados por tipo.
@@ -141,6 +141,46 @@ def criar_embed(fila, valor, tipo=None, ids=None):
     )
 
     return embed
+
+class PartidaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ConfirmarPartidaButton())
+        self.add_item(CancelarPartidaButton())
+
+
+class ConfirmarPartidaButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Confirmar partida",
+            style=discord.ButtonStyle.success,
+            custom_id="partida_confirmar",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content="✅ **Partida confirmada!**",
+            view=None,
+        )
+
+
+class CancelarPartidaButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Cancelar partida",
+            style=discord.ButtonStyle.danger,
+            custom_id="partida_cancelar",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = interaction.channel
+        await interaction.response.send_message(
+            "❌ **Partida cancelada.** Esta sala será apagada.",
+            ephemeral=True,
+        )
+        if channel is not None:
+            await channel.delete(reason=f"Partida cancelada por {interaction.user}")
+
 
 class FilaView(discord.ui.View):
     def __init__(self, fila, valor):
@@ -298,6 +338,7 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
                 f"Todos os jogadores da fila foram colocados nesta sala automaticamente."
             ),
             embed=embed_partida,
+            view=PartidaView(),
         )
 
         # Limpa somente a fila que acabou de formar a partida.
@@ -321,6 +362,7 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
         )
 
 async def registrar_views():
+    bot.add_view(PartidaView())
     for fila in FILAS:
         for valor in VALORES:
             bot.add_view(FilaView(fila, valor))
@@ -357,8 +399,8 @@ async def painel(interaction: discord.Interaction):
         )
 
 @bot.tree.command(
-    name="limparfila",
-    description="Limpa todas as filas deste canal.",
+    name="limpar",
+    description="Limpa as filas antigas deste canal.",
 )
 async def limparfila(interaction: discord.Interaction):
     fila = descobrir_fila(interaction.channel)
@@ -374,8 +416,39 @@ async def limparfila(interaction: discord.Interaction):
         filas[chave_fila(fila, valor)]["normal"].clear()
         filas[chave_fila(fila, valor)]["infinito"].clear()
 
+    # Apaga somente as mensagens de painel criadas pelo bot.
+    # Mensagens normais dos jogadores não são removidas.
+    apagadas = 0
+    async for message in interaction.channel.history(limit=None):
+        if message.author.id != bot.user.id:
+            continue
+
+        # Painéis de fila têm embed com o título do ORG DRACO e
+        # componentes da FilaView. Não apaga outras mensagens do bot.
+        eh_painel = (
+            bool(message.embeds)
+            and message.embeds[0].title
+            and "ORG DRACO" in message.embeds[0].title
+            and any(
+                child.custom_id
+                and child.custom_id.startswith(("fila_entrar_", "fila_sair_"))
+                for child in getattr(message, "components", [])
+                for row in [child]
+                if hasattr(row, "children")
+                for child in row.children
+            )
+        )
+
+        if eh_painel:
+            try:
+                await message.delete()
+                apagadas += 1
+            except discord.HTTPException:
+                pass
+
     await interaction.response.send_message(
-        f"🧹 Todas as filas de **{fila}** foram limpas.",
+        f"🧹 **{apagadas}** filas antigas de **{fila}** foram apagadas. "
+        f"As mensagens normais dos jogadores foram mantidas.",
         ephemeral=True,
     )
 
@@ -385,3 +458,4 @@ async def setup_hook():
     await registrar_views()
 
 bot.run(TOKEN)
+    
