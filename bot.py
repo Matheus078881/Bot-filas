@@ -5,6 +5,8 @@ from flask import Flask
 import discord
 from discord.ext import commands
 
+LOGO_PATH = "org_draco.png"
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("A variável DISCORD_TOKEN não foi configurada.")
@@ -100,7 +102,9 @@ def criar_embed(fila, valor, tipo=None, ids=None):
 
     embed = discord.Embed(
         title=f"🔥 {config['modo'].upper()} | ORG DRACO",
+        color=discord.Color.red(),
     )
+    embed.set_thumbnail(url="attachment://org_draco.png")
 
     embed.add_field(
         name="🎮 Modo",
@@ -158,9 +162,11 @@ class ConfirmarPartidaButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
-            content="✅ **Partida confirmada!**",
-            view=None,
+        # A confirmação é individual. Não removemos a View da mensagem,
+        # pois os outros jogadores ainda precisam conseguir confirmar.
+        await interaction.response.send_message(
+            f"✅ {interaction.user.mention} **confirmou a partida!**",
+            ephemeral=True,
         )
 
 
@@ -339,6 +345,7 @@ async def entrar_na_fila(interaction, fila, valor, tipo):
             ),
             embed=embed_partida,
             view=PartidaView(),
+            file=discord.File(LOGO_PATH, filename="org_draco.png"),
         )
 
         # Limpa somente a fila que acabou de formar a partida.
@@ -396,6 +403,7 @@ async def painel(interaction: discord.Interaction):
         await interaction.channel.send(
             embed=criar_embed(fila, valor),
             view=FilaView(fila, valor),
+            file=discord.File(LOGO_PATH, filename="org_draco.png"),
         )
 
 @bot.tree.command(
